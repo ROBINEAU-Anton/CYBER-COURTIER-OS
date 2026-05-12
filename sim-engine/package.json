@@ -1,0 +1,23 @@
+{
+  "name": "sim-engine",
+  "version": "1.0.0",
+  "description": "Simulation Engine for Cyberpunk Game",
+  "main": "dist/simulation.js",
+  "scripts": {
+    "start": "node dist/simulation.js",
+    "dev": "tsx watch src/simulation.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "ioredis": "^5.3.2",
+    "pg": "^8.11.3",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.20",
+    "@types/pg": "^8.11.1",
+    "@types/uuid": "^9.0.8",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3"
+  }
+}

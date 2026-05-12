@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  # ======== À AJOUTER À VOTRE STACK PORTAINER ========
+  game-worker:
+    # Soit vous buildez localement sur le Pi avec "build: ." 
+    # Soit vous utilisez une image pré-buildée hébergée sur le hub
+    build:
+      context: ./tick-engine
+      dockerfile: Dockerfile
+    container_name: game-worker
+    environment:
+      # Utilisation des noms de services Docker pour la résolution DNS interne
+      - REDIS_URL=redis://game-redis:6379
+      - DATABASE_URL=postgres://mon_user:mon_mot_de_passe@game-db:5432/ma_base_de_donnees?sslmode=disable
+    depends_on:
+      - game-db
+      - game-redis
+    restart: unless-stopped
+  # ===================================================
+
+  # Exemple des services dont dépend le worker :
+  game-redis:
+    image: redis:alpine
+    container_name: game-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  game-db:
+    image: postgres:15-alpine
+    container_name: game-db
+    environment:
+      - POSTGRES_USER=mon_user
+      - POSTGRES_PASSWORD=mon_mot_de_passe
+      - POSTGRES_DB=ma_base_de_donnees
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  pgdata:

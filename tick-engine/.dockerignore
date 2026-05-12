@@ -1,0 +1,26 @@
+# Git
+.git
+.gitignore
+
+# Go
+vendor/
+go.work
+
+# IDE / Editeurs
+.vscode/
+.idea/
+*.swp
+
+# Binaires locaux et builds
+*.exe
+*.out
+*.test
+debug/
+worker
+cmd/worker/worker
+
+# Fichiers de logs locaux
+*.log
+
+# Documentation et divers
+*.md
