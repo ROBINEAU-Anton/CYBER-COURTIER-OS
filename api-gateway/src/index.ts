@@ -18,8 +18,9 @@ const fastify = Fastify({ logger: true });
 
 // Configuration de CORS pour autoriser le frontend Vite
 fastify.register(cors, {
-  origin: 'http://localhost:5173',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+  origin: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning']
 });
 
 // Typage pour la requête
@@ -46,7 +47,7 @@ fastify.post<AttackRequest>('/actions/attack', async (request, reply) => {
 
     // 1. Fetch packet info and target server security_level
     const packetResult = await client.query(`
-      SELECT dp.target_server_id, ts.security_level 
+      SELECT dp.target_server_id, ts.security_level, ts.base_cost 
       FROM data_packets dp 
       JOIN target_servers ts ON dp.target_server_id = ts.id 
       WHERE dp.id = $1
@@ -59,7 +60,8 @@ fastify.post<AttackRequest>('/actions/attack', async (request, reply) => {
 
     const targetServerId = packetResult.rows[0].target_server_id;
     const securityLevel = packetResult.rows[0].security_level;
-    const injectionCost = securityLevel * 100;
+    const baseCost = packetResult.rows[0].base_cost;
+    const injectionCost = baseCost * securityLevel;
 
     // 2. Vérification du joueur (avec FOR UPDATE pour verrouiller la ligne)
     const playerResult = await client.query('SELECT credits FROM players WHERE id = $1 FOR UPDATE', [player_id]);
@@ -140,16 +142,66 @@ fastify.get<PlayerParams>('/player/:id', async (request, reply) => {
   }
 });
 
+// Route POST /player/register
+interface RegisterRequest {
+  Body: {
+    player_id: string;
+  };
+}
+
+fastify.post<RegisterRequest>('/player/register', async (request, reply) => {
+  const { player_id } = request.body;
+  
+  if (!player_id) {
+    return reply.status(400).send({ error: "player_id requis" });
+  }
+
+  const client = await dbPool.connect();
+  try {
+    const checkRes = await client.query('SELECT id FROM players WHERE id = $1', [player_id]);
+    if (checkRes.rows.length > 0) {
+      return reply.status(200).send({ message: "Joueur déjà enregistré" });
+    }
+
+    const username = `Runner_${player_id.substring(0, 4).toUpperCase()}`;
+    await client.query(
+      'INSERT INTO players (id, name, username, credits) VALUES ($1, $2, $3, 5000)',
+      [player_id, username, username]
+    );
+
+    return reply.status(201).send({ message: "Nouveau runner enregistré", username });
+  } catch (error) {
+    fastify.log.error(error);
+    return reply.status(500).send({ error: "Erreur d'enregistrement" });
+  } finally {
+    client.release();
+  }
+});
+
 // Route GET /servers pour le Dashboard
 fastify.get('/servers', async (request, reply) => {
   const client = await dbPool.connect();
 
   try {
-    const result = await client.query('SELECT id, name, security_level FROM target_servers ORDER BY name ASC');
+    const result = await client.query('SELECT id, name, security_level, base_cost FROM target_servers ORDER BY name ASC');
     return reply.status(200).send(result.rows);
   } catch (error) {
     fastify.log.error(error);
     return reply.status(500).send({ error: "Erreur lors du balayage du réseau." });
+  } finally {
+    client.release();
+  }
+});
+
+// Route GET /leaderboard
+fastify.get('/leaderboard', async (request, reply) => {
+  const client = await dbPool.connect();
+  try {
+    const result = await client.query('SELECT username, credits FROM players ORDER BY credits DESC LIMIT 5');
+    return reply.status(200).send(result.rows);
+  } catch (error) {
+    fastify.log.error(error);
+    return reply.status(500).send({ error: "Erreur lors de la récupération du leaderboard." });
   } finally {
     client.release();
   }
@@ -200,6 +252,10 @@ fastify.post('/session/reset', async (request, reply) => {
 // Démarrage du serveur
 const start = async () => {
   try {
+    const client = await dbPool.connect();
+    fastify.log.info("[DB] Connexion à la base de données PostgreSQL réussie.");
+    client.release();
+
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     fastify.log.info(`API Gateway active sur le port ${PORT}`);
   } catch (err) {

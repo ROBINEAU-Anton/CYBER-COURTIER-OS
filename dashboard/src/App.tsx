@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Terminal, Shield, Zap, Activity } from 'lucide-react';
+import { Leaderboard } from './components/Leaderboard';
 
 interface Player {
   username: string;
@@ -10,6 +11,7 @@ interface Server {
   id: string;
   name: string;
   security_level: number;
+  base_cost?: number;
 }
 
 interface LogEntry {
@@ -27,9 +29,19 @@ interface GlobalAction {
   created_at: string;
 }
 
-const API_URL = 'http://localhost:3000';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+const getPlayerId = () => {
+  let pid = localStorage.getItem('cyber_player_id');
+  if (!pid) {
+    pid = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    localStorage.setItem('cyber_player_id', pid);
+  }
+  return pid;
+};
 
 function App() {
+  const [playerId] = useState<string>(getPlayerId());
   const [player, setPlayer] = useState<Player | null>(null);
   const [servers, setServers] = useState<Server[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -37,6 +49,7 @@ function App() {
   const [isLive, setIsLive] = useState(false);
   const [isMoneyFlash, setIsMoneyFlash] = useState(false);
   const [injectingId, setInjectingId] = useState<string | null>(null);
+  const [glitchingServers, setGlitchingServers] = useState<Set<string>>(new Set());
 
   const addLog = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
     const now = new Date();
@@ -47,9 +60,9 @@ function App() {
   const fetchData = async () => {
     try {
       const [playerRes, serversRes, recentRes] = await Promise.all([
-        fetch(`${API_URL}/player/p1`),
-        fetch(`${API_URL}/servers`),
-        fetch(`${API_URL}/actions/recent`)
+        fetch(`${API_URL}/player/${playerId}`, { headers: { 'ngrok-skip-browser-warning': 'true' } }),
+        fetch(`${API_URL}/servers`, { headers: { 'ngrok-skip-browser-warning': 'true' } }),
+        fetch(`${API_URL}/actions/recent`, { headers: { 'ngrok-skip-browser-warning': 'true' } })
       ]);
 
       if (playerRes.ok) {
@@ -62,9 +75,10 @@ function App() {
           return pData;
         });
       }
-      
+
       if (serversRes.ok) {
         const sData = await serversRes.json();
+        console.log("Cibles reçues:", sData);
         setServers(sData);
       } else {
         console.error("SERVERS API ERROR:", await serversRes.text());
@@ -76,6 +90,13 @@ function App() {
           if (prev.length > 0 && recentData.length > 0 && prev[0].id !== recentData[0].id) {
             setIsLive(true);
             setTimeout(() => setIsLive(false), 500);
+
+            const newActions = recentData.filter((r: any) => !prev.find(p => p.id === r.id));
+            const newAnnihilations = newActions.filter((a: any) => a.status === 'ANNIHILATED');
+            if (newAnnihilations.length > 0) {
+              setGlitchingServers(new Set(newAnnihilations.map((a: any) => a.server_name)));
+              setTimeout(() => setGlitchingServers(new Set()), 1000);
+            }
           }
           return recentData;
         });
@@ -88,11 +109,24 @@ function App() {
   };
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 1000);
-    addLog("Connexion au réseau neuronal établie.", "success");
+    let interval: number;
+    const initPlayer = async () => {
+      try {
+        await fetch(`${API_URL}/player/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+          body: JSON.stringify({ player_id: playerId })
+        });
+      } catch (err) {
+        console.error("Register err", err);
+      }
+      fetchData();
+      interval = setInterval(fetchData, 1000);
+      addLog("Connexion au réseau neuronal établie.", "success");
+    };
+    initPlayer();
     return () => clearInterval(interval);
-  }, []);
+  }, [playerId]);
 
   const handleInject = async (serverId: string, packetId: string, serverName: string, cost: number) => {
     if (!player || player.credits < cost) {
@@ -101,12 +135,12 @@ function App() {
     }
 
     setInjectingId(serverId);
-    
+
     try {
       const res = await fetch(`${API_URL}/actions/attack`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ player_id: 'p1', packet_id: packetId })
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+        body: JSON.stringify({ player_id: playerId, packet_id: packetId })
       });
 
       const data = await res.json();
@@ -118,6 +152,7 @@ function App() {
         addLog(`ERREUR: ${data.error}`, "error");
       }
     } catch (err) {
+      console.error(err);
       addLog(`FATAL: Connexion au serveur central perdue.`, "error");
     } finally {
       setTimeout(() => setInjectingId(null), 400);
@@ -126,7 +161,10 @@ function App() {
 
   const handleResetSession = async () => {
     try {
-      const res = await fetch(`${API_URL}/session/reset`, { method: 'POST' });
+      const res = await fetch(`${API_URL}/session/reset`, { 
+        method: 'POST',
+        headers: { 'ngrok-skip-browser-warning': 'true' }
+      });
       if (res.ok) {
         addLog("Session système redémarrée. Nouveau deck assigné.", "success");
         fetchData();
@@ -134,6 +172,7 @@ function App() {
         addLog("Erreur lors du redémarrage de la session.", "error");
       }
     } catch (err) {
+      console.error(err);
       addLog("FATAL: Impossible de contacter l'API pour le reset.", "error");
     }
   };
@@ -141,14 +180,14 @@ function App() {
   return (
     <div className="min-h-screen flex flex-col relative z-10">
       <div className="scanlines"></div>
-      
+
       {/* SYSTEM FAILURE Overlay */}
       {player && player.credits <= 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-6 p-12 border-2 border-cyber-glitch bg-cyber-dark/80 text-center animate-pulse shadow-[0_0_50px_#ff003c]">
             <h1 className="text-6xl font-bold text-cyber-glitch tracking-[0.5em] drop-shadow-[0_0_15px_#ff003c]">SYSTEM FAILURE</h1>
             <p className="text-xl text-cyber-glitch/80">Fonds insuffisants. Votre deck a été compromis et tracé par la Matrice.</p>
-            <button 
+            <button
               onClick={handleResetSession}
               className="mt-8 px-8 py-4 border-2 border-cyber-glitch text-cyber-glitch hover:bg-cyber-glitch hover:text-black font-bold tracking-widest text-xl transition-all duration-300 shadow-[0_0_15px_#ff003c]"
             >
@@ -172,21 +211,22 @@ function App() {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col md:flex-row p-4 gap-6 overflow-hidden z-20">
-        
+
         {/* Servers Grid */}
         <section className="flex-1 flex flex-col gap-4">
           <h2 className="text-lg tracking-widest border-b border-cyber-neon/30 pb-2 flex items-center gap-2">
             <Activity size={18} /> CIBLES MATRICIELLES DÉTECTÉES
           </h2>
-          
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 overflow-y-auto pr-2 pb-10">
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-4 overflow-y-auto pr-2 pb-10">
             {servers.length === 0 ? (
               <div className="text-cyber-neon/50 animate-pulse">Recherche de cibles...</div>
             ) : (
               servers.map(server => {
-                const cost = server.security_level * 100;
+                const cost = (server.base_cost || 100) * server.security_level;
+                const isGlitching = glitchingServers.has(server.id);
                 return (
-                  <div key={server.id} className="cyber-panel p-5 flex flex-col gap-4 group">
+                  <div key={server.id} className={`cyber-panel p-5 flex flex-col gap-4 group ${isGlitching ? 'animate-cyber-glitch border-cyber-glitch' : ''}`}>
                     <div className="flex justify-between items-start">
                       <div>
                         <h3 className="text-xl font-bold text-white group-hover:text-cyber-neon transition-colors">
@@ -205,8 +245,8 @@ function App() {
                     {/* Static Graph */}
                     <div className="h-10 border-t border-b border-cyber-neon/20 flex items-end gap-1 pt-1 overflow-hidden opacity-50">
                       {Array.from({ length: 20 }).map((_, i) => (
-                        <div 
-                          key={i} 
+                        <div
+                          key={i}
                           className="w-full bg-cyber-neon/30 hover:bg-cyber-neon transition-colors"
                           style={{ height: `${Math.random() * 100}%` }}
                         ></div>
@@ -232,7 +272,7 @@ function App() {
 
         {/* Side Panel - Logs */}
         <aside className="w-full md:w-80 lg:w-96 flex flex-col gap-4 overflow-hidden">
-          
+
           {/* Console d'Activité */}
           <div className="flex flex-col gap-2 flex-1 min-h-0">
             <h2 className="text-lg tracking-widest border-b border-cyber-neon/30 pb-2">
@@ -257,6 +297,9 @@ function App() {
             </div>
           </div>
 
+          {/* Leaderboard */}
+          <Leaderboard />
+
           {/* Flux Global */}
           <div className="flex flex-col gap-2 flex-1 min-h-0">
             <h2 className="text-lg tracking-widest border-b border-cyber-neon/30 pb-2 flex justify-between items-center">
@@ -272,7 +315,7 @@ function App() {
                   <div key={action.id} className="flex gap-2">
                     <span className="text-cyber-neon/50 opacity-70 whitespace-nowrap">[{new Date(action.created_at).toLocaleTimeString()}]</span>
                     <span className="text-white">
-                      <span className="text-cyber-neon font-bold">{action.username}</span> a attaqué <span className="text-gray-300">{action.server_name}</span> 
+                      <span className="text-cyber-neon font-bold">{action.username}</span> a attaqué <span className="text-gray-300">{action.server_name}</span>
                       {' '}
                       <span className={action.status === 'SUCCESS' ? 'text-cyber-neon font-bold' : action.status === 'PENDING' ? 'text-yellow-400' : 'text-cyber-glitch font-bold'}>
                         ({action.status})
@@ -287,7 +330,7 @@ function App() {
               </div>
             </div>
           </div>
-          
+
         </aside>
 
       </main>

@@ -65,14 +65,14 @@ func (c *Committer) CommitBatch(ctx context.Context, batch models.ResolutionBatc
 		}
 
 		if res.Status == models.StatusSuccess {
-			var packetValue, secLevel float64
+			var packetValue, secLevel, gainMultiplier float64
 			errQuery := tx.QueryRow(ctx, `
-				SELECT COALESCE(dp.value, 5000), ts.security_level
+				SELECT COALESCE(dp.value, 5000), ts.security_level, ts.gain_multiplier
 				FROM virus_actions va
 				JOIN data_packets dp ON dp.id = va.packet_id
 				JOIN target_servers ts ON ts.id = dp.target_server_id
 				WHERE va.id = $1
-			`, res.ActionID).Scan(&packetValue, &secLevel)
+			`, res.ActionID).Scan(&packetValue, &secLevel, &gainMultiplier)
 			
 			var gain int
 			if errQuery != nil {
@@ -83,11 +83,11 @@ func (c *Committer) CommitBatch(ctx context.Context, batch models.ResolutionBatc
 					return errQuery
 				}
 			} else {
-				gain = int(packetValue * (secLevel / 10.0))
+				gain = int(packetValue * (secLevel / 10.0) * gainMultiplier)
 			}
 
 			// Créditer le joueur
-			tagCred, errCred := tx.Exec(ctx, `
+			_, errCred := tx.Exec(ctx, `
 				UPDATE players p
 				SET credits = p.credits + $2
 				FROM virus_actions va
@@ -99,7 +99,7 @@ func (c *Committer) CommitBatch(ctx context.Context, batch models.ResolutionBatc
 			}
 		} else if res.Status == models.StatusAnnihilated {
 			// Pénalité 'Trace détectée' si security_level > 20
-			tagPen, errPen := tx.Exec(ctx, `
+			_, errPen := tx.Exec(ctx, `
 				UPDATE players p
 				SET credits = p.credits - 500
 				FROM virus_actions va
@@ -109,6 +109,18 @@ func (c *Committer) CommitBatch(ctx context.Context, batch models.ResolutionBatc
 			if errPen != nil {
 				slog.Error("Erreur SQL lors de la pénalité Annihilation", "action_id", res.ActionID, "error", errPen)
 				return errPen
+			}
+			
+			// Pénalité de 20% si srv-vault
+			_, errVault := tx.Exec(ctx, `
+				UPDATE players p
+				SET credits = CAST(p.credits * 0.8 AS INTEGER)
+				FROM virus_actions va
+				WHERE p.id = va.player_id AND va.id = $1 AND va.target_server_id = 'srv-vault'
+			`, res.ActionID)
+			if errVault != nil {
+				slog.Error("Erreur SQL lors de la pénalité Vault", "action_id", res.ActionID, "error", errVault)
+				return errVault
 			}
 		}
 	}

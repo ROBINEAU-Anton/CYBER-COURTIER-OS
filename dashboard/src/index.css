@@ -55,3 +55,19 @@
   animation: money-flash 0.8s ease-out;
   display: inline-block;
 }
+
+@keyframes cyber-glitch {
+  0% { transform: translate(0) }
+  20% { transform: translate(-2px, 2px) }
+  40% { transform: translate(-2px, -2px) }
+  60% { transform: translate(2px, 2px) }
+  80% { transform: translate(2px, -2px) }
+  100% { transform: translate(0) }
+}
+
+.animate-cyber-glitch {
+  animation: cyber-glitch 0.2s cubic-bezier(.25, .46, .45, .94) both infinite;
+  color: #ff003c;
+  border-color: #ff003c;
+  box-shadow: 0 0 10px #ff003c inset;
+}

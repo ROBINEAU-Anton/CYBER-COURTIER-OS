@@ -11,7 +11,7 @@ RUN npm run build
 
 # Production stage
 FROM node:20-alpine
-LABEL version="1.0.0"
+LABEL version="2.0.0"
 
 WORKDIR /app
 

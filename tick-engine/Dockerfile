@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o worker ./cmd/worker
 
 # Stage 2 : Image finale (légère)
 FROM alpine:latest
-LABEL version="1.0.0"
+LABEL version="2.0.0"
 WORKDIR /root/
 
 # Ajout des certificats racine (utile si connexion sécurisée externe plus tard)

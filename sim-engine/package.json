@@ -1,6 +1,6 @@
 {
   "name": "sim-engine",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Simulation Engine for Cyberpunk Game",
   "main": "dist/simulation.js",
   "scripts": {
