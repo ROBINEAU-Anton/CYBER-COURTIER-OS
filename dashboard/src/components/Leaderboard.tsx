@@ -4,6 +4,7 @@ import { Trophy } from 'lucide-react';
 interface LeaderboardPlayer {
   username: string;
   credits: number;
+  level: number;
 }
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -45,7 +46,7 @@ export function Leaderboard() {
                   #{index + 1}
                 </span>
                 <span className={index === 0 ? 'text-white font-bold' : 'text-gray-300'}>
-                  {p.username}
+                  {p.username} <span className="text-xs text-cyber-neon/70 ml-1">Lv.{p.level || 1}</span>
                 </span>
               </div>
               <span className="text-cyber-neon font-bold">{p.credits} ¤</span>

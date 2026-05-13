@@ -71,3 +71,23 @@
   border-color: #ff003c;
   box-shadow: 0 0 10px #ff003c inset;
 }
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.5);
+  border-left: 1px solid rgba(0, 255, 204, 0.1);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 255, 204, 0.5);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 255, 204, 0.8);
+}

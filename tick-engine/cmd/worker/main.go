@@ -70,6 +70,22 @@ func main() {
 	tickDuration := 1 * time.Second
 	tickEngine := engine.NewTickEngine(tickDuration, redisClient, committer)
 
+	// Lancement de la routine des gains passifs (toutes les 10 secondes)
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if committer != nil {
+					committer.ProcessPassiveIncome(ctx)
+				}
+			}
+		}
+	}()
+
 	// Lancement du moteur (bloquant jusqu'à l'annulation du contexte)
 	tickEngine.Start(ctx)
 

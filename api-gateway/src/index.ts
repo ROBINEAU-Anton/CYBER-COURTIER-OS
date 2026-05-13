@@ -64,7 +64,7 @@ fastify.post<AttackRequest>('/actions/attack', async (request, reply) => {
     const injectionCost = baseCost * securityLevel;
 
     // 2. Vérification du joueur (avec FOR UPDATE pour verrouiller la ligne)
-    const playerResult = await client.query('SELECT credits FROM players WHERE id = $1 FOR UPDATE', [player_id]);
+    const playerResult = await client.query('SELECT credits, class FROM players WHERE id = $1 FOR UPDATE', [player_id]);
     
     if (playerResult.rows.length === 0) {
       await client.query('ROLLBACK');
@@ -72,13 +72,20 @@ fastify.post<AttackRequest>('/actions/attack', async (request, reply) => {
     }
 
     const credits = playerResult.rows[0].credits;
-    if (credits < injectionCost) {
+    const playerClass = playerResult.rows[0].class;
+    
+    let finalCost = injectionCost;
+    if (playerClass === 'ADMIN') {
+      finalCost = Math.floor(injectionCost / 2);
+    }
+
+    if (credits < finalCost) {
       await client.query('ROLLBACK');
-      return reply.status(400).send({ error: `Fonds insuffisants. Coût de l'injection : ${injectionCost} ¤.` });
+      return reply.status(400).send({ error: `Fonds insuffisants. Coût de l'injection : ${finalCost} ¤.` });
     }
 
     // 3. Débit des crédits
-    await client.query('UPDATE players SET credits = credits - $2 WHERE id = $1', [player_id, injectionCost]);
+    await client.query('UPDATE players SET credits = credits - $2 WHERE id = $1', [player_id, finalCost]);
 
     // 4. Création de l'action Virus en base de données et dans la file Redis
     const actionId = uuidv4();
@@ -127,7 +134,7 @@ fastify.get<PlayerParams>('/player/:id', async (request, reply) => {
   const client = await dbPool.connect();
 
   try {
-    const result = await client.query('SELECT username, credits FROM players WHERE id = $1', [id]);
+    const result = await client.query('SELECT username, credits, level, xp, class FROM players WHERE id = $1', [id]);
     
     if (result.rows.length === 0) {
       return reply.status(404).send({ error: "Profil neuronal introuvable." });
@@ -165,7 +172,7 @@ fastify.post<RegisterRequest>('/player/register', async (request, reply) => {
 
     const username = `Runner_${player_id.substring(0, 4).toUpperCase()}`;
     await client.query(
-      'INSERT INTO players (id, name, username, credits) VALUES ($1, $2, $3, 5000)',
+      'INSERT INTO players (id, name, username, credits, level, xp) VALUES ($1, $2, $3, 5000, 1, 0)',
       [player_id, username, username]
     );
 
@@ -173,6 +180,144 @@ fastify.post<RegisterRequest>('/player/register', async (request, reply) => {
   } catch (error) {
     fastify.log.error(error);
     return reply.status(500).send({ error: "Erreur d'enregistrement" });
+  } finally {
+    client.release();
+  }
+});
+
+interface SelectClassRequest {
+  Body: {
+    player_id: string;
+    player_class: string;
+  };
+}
+
+fastify.post<SelectClassRequest>('/player/select-class', async (request, reply) => {
+  const { player_id, player_class } = request.body;
+  if (!player_id || !player_class) {
+    return reply.status(400).send({ error: "player_id et player_class requis" });
+  }
+
+  const validClasses = ['ADMIN', 'BRUTE', 'GHOST'];
+  if (!validClasses.includes(player_class)) {
+    return reply.status(400).send({ error: "Classe invalide" });
+  }
+
+  const client = await dbPool.connect();
+  try {
+    const result = await client.query('UPDATE players SET class = $1 WHERE id = $2 AND class IS NULL', [player_class, player_id]);
+    // Note: rowCount requires result.rowCount, verify it exists. Yes it does in pg.
+    if (result.rowCount === 0) {
+      return reply.status(400).send({ error: "Impossible de changer de classe ou joueur introuvable." });
+    }
+    return reply.status(200).send({ message: "Classe sélectionnée avec succès !" });
+  } catch (error) {
+    fastify.log.error(error);
+    return reply.status(500).send({ error: "Erreur lors de la sélection de la classe." });
+  } finally {
+    client.release();
+  }
+});
+
+interface UpgradeRequest {
+  Body: {
+    player_id: string;
+    upgrade_id: string;
+    cost: number;
+  };
+}
+
+fastify.post<UpgradeRequest>('/player/upgrade', async (request, reply) => {
+  const { player_id, upgrade_id, cost } = request.body;
+  if (!player_id || !upgrade_id || !cost) {
+    return reply.status(400).send({ error: "Paramètres manquants" });
+  }
+
+  const client = await dbPool.connect();
+  try {
+    await client.query('BEGIN');
+    const playerRes = await client.query('SELECT credits FROM players WHERE id = $1 FOR UPDATE', [player_id]);
+    if (playerRes.rows.length === 0 || playerRes.rows[0].credits < cost) {
+      await client.query('ROLLBACK');
+      return reply.status(400).send({ error: "Fonds insuffisants ou joueur introuvable." });
+    }
+
+    await client.query('UPDATE players SET credits = credits - $1 WHERE id = $2', [cost, player_id]);
+    
+    await client.query(`
+      INSERT INTO player_upgrades (player_id, upgrade_id, level)
+      VALUES ($1, $2, 1)
+      ON CONFLICT (player_id, upgrade_id)
+      DO UPDATE SET level = player_upgrades.level + 1
+    `, [player_id, upgrade_id]);
+
+    await client.query('COMMIT');
+    return reply.status(200).send({ message: "Upgrade acheté avec succès !" });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    fastify.log.error(error);
+    return reply.status(500).send({ error: "Erreur lors de l'achat de l'upgrade." });
+  } finally {
+    client.release();
+  }
+});
+
+fastify.get<PlayerParams>('/player/hardware/:id', async (request, reply) => {
+  const { id } = request.params;
+  const client = await dbPool.connect();
+  try {
+    const result = await client.query('SELECT id, slot, name, bonus_type, bonus_value FROM player_hardware WHERE player_id = $1', [id]);
+    return reply.status(200).send(result.rows);
+  } catch (error) {
+    fastify.log.error(error);
+    return reply.status(200).send([]); // Evite de crasher le dashboard si la table n'existe pas encore
+  } finally {
+    client.release();
+  }
+});
+
+interface BuyHardwareRequest {
+  Body: {
+    player_id: string;
+    slot: string;
+    name: string;
+    bonus_type: string;
+    bonus_value: number;
+    cost: number;
+  };
+}
+
+fastify.post<BuyHardwareRequest>('/player/buy-hardware', async (request, reply) => {
+  const { player_id, slot, name, bonus_type, bonus_value, cost } = request.body;
+  if (!player_id || !slot || !name || !cost) {
+    return reply.status(400).send({ error: "Paramètres manquants" });
+  }
+
+  const client = await dbPool.connect();
+  try {
+    await client.query('BEGIN');
+    const playerRes = await client.query('SELECT credits FROM players WHERE id = $1 FOR UPDATE', [player_id]);
+    if (playerRes.rows.length === 0 || playerRes.rows[0].credits < cost) {
+      await client.query('ROLLBACK');
+      return reply.status(400).send({ error: "Fonds insuffisants." });
+    }
+
+    await client.query('UPDATE players SET credits = credits - $1 WHERE id = $2', [cost, player_id]);
+    
+    // On remplace l'équipement existant sur ce slot
+    await client.query('DELETE FROM player_hardware WHERE player_id = $1 AND slot = $2', [player_id, slot]);
+
+    await client.query(`
+      INSERT INTO player_hardware (player_id, slot, name, bonus_type, bonus_value)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [player_id, slot, name, bonus_type, bonus_value]);
+
+    await client.query('COMMIT');
+    return reply.status(200).send({ message: "Hardware installé avec succès !" });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    fastify.log.error(error);
+    return reply.status(500).send({ error: "Erreur lors de l'achat du hardware." });
   } finally {
     client.release();
   }
@@ -197,7 +342,7 @@ fastify.get('/servers', async (request, reply) => {
 fastify.get('/leaderboard', async (request, reply) => {
   const client = await dbPool.connect();
   try {
-    const result = await client.query('SELECT username, credits FROM players ORDER BY credits DESC LIMIT 5');
+    const result = await client.query('SELECT username, credits, level FROM players ORDER BY credits DESC LIMIT 5');
     return reply.status(200).send(result.rows);
   } catch (error) {
     fastify.log.error(error);
