@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import { Pool } from 'pg';
 import Redis from 'ioredis';
 import { v4 as uuidv4 } from 'uuid';
+import bcrypt from 'bcryptjs';
 
 // Configuration de l'environnement
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
@@ -134,7 +135,7 @@ fastify.get<PlayerParams>('/player/:id', async (request, reply) => {
   const client = await dbPool.connect();
 
   try {
-    const result = await client.query('SELECT username, credits, level, xp, class FROM players WHERE id = $1', [id]);
+    const result = await client.query('SELECT username, credits, level, xp, class, active_exploit FROM players WHERE id = $1', [id]);
     
     if (result.rows.length === 0) {
       return reply.status(404).send({ error: "Profil neuronal introuvable." });
@@ -149,37 +150,81 @@ fastify.get<PlayerParams>('/player/:id', async (request, reply) => {
   }
 });
 
-// Route POST /player/register
-interface RegisterRequest {
+// Auth routes
+interface AuthRequest {
   Body: {
-    player_id: string;
+    username: string;
+    password?: string;
   };
 }
 
-fastify.post<RegisterRequest>('/player/register', async (request, reply) => {
-  const { player_id } = request.body;
-  
-  if (!player_id) {
-    return reply.status(400).send({ error: "player_id requis" });
+fastify.post<AuthRequest>('/auth/register', async (request, reply) => {
+  const { username, password } = request.body;
+  if (!username || !password) {
+    return reply.status(400).send({ error: "username et password requis" });
   }
 
   const client = await dbPool.connect();
   try {
-    const checkRes = await client.query('SELECT id FROM players WHERE id = $1', [player_id]);
+    await client.query('BEGIN');
+    
+    // Check if user exists
+    const checkRes = await client.query('SELECT id FROM users WHERE username = $1', [username]);
     if (checkRes.rows.length > 0) {
-      return reply.status(200).send({ message: "Joueur déjà enregistré" });
+      await client.query('ROLLBACK');
+      return reply.status(400).send({ error: "Ce nom d'utilisateur est déjà pris." });
     }
 
-    const username = `Runner_${player_id.substring(0, 4).toUpperCase()}`;
+    const userId = uuidv4();
+    const hash = await bcrypt.hash(password, 10);
+
+    // Insert user
     await client.query(
-      'INSERT INTO players (id, name, username, credits, level, xp) VALUES ($1, $2, $3, 5000, 1, 0)',
-      [player_id, username, username]
+      'INSERT INTO users (id, username, password_hash) VALUES ($1, $2, $3)',
+      [userId, username, hash]
     );
 
-    return reply.status(201).send({ message: "Nouveau runner enregistré", username });
+    // Create initial player profile
+    await client.query(
+      'INSERT INTO players (id, name, username, credits, level, xp) VALUES ($1, $2, $3, 5000, 1, 0)',
+      [userId, username, username]
+    );
+
+    await client.query('COMMIT');
+    return reply.status(201).send({ message: "Nouveau runner enregistré", player_id: userId, username });
   } catch (error) {
+    await client.query('ROLLBACK');
     fastify.log.error(error);
     return reply.status(500).send({ error: "Erreur d'enregistrement" });
+  } finally {
+    client.release();
+  }
+});
+
+fastify.post<AuthRequest>('/auth/login', async (request, reply) => {
+  const { username, password } = request.body;
+  if (!username || !password) {
+    return reply.status(400).send({ error: "username et password requis" });
+  }
+
+  const client = await dbPool.connect();
+  try {
+    const res = await client.query('SELECT id, password_hash FROM users WHERE username = $1', [username]);
+    if (res.rows.length === 0) {
+      return reply.status(401).send({ error: "Identifiants invalides." });
+    }
+
+    const user = res.rows[0];
+    const match = await bcrypt.compare(password, user.password_hash);
+    
+    if (!match) {
+      return reply.status(401).send({ error: "Identifiants invalides." });
+    }
+
+    return reply.status(200).send({ message: "Connexion réussie", player_id: user.id });
+  } catch (error) {
+    fastify.log.error(error);
+    return reply.status(500).send({ error: "Erreur de connexion" });
   } finally {
     client.release();
   }
@@ -338,11 +383,190 @@ fastify.get('/servers', async (request, reply) => {
   }
 });
 
+interface ScanRequest {
+  Body: {
+    player_id: string;
+  };
+}
+
+fastify.post<ScanRequest>('/player/scan', async (request, reply) => {
+  const { player_id } = request.body;
+  if (!player_id) return reply.status(400).send({ error: "player_id requis" });
+
+  const client = await dbPool.connect();
+  try {
+    const playerRes = await client.query('SELECT job_scraper_lvl FROM players WHERE id = $1', [player_id]);
+    if (playerRes.rows.length === 0) return reply.status(404).send({ error: "Joueur introuvable." });
+    
+    const scraperLvl = playerRes.rows[0].job_scraper_lvl || 1;
+    const fragments = Math.floor(Math.random() * 5 + 1) * scraperLvl;
+    
+    await client.query(`
+      INSERT INTO resources (player_id, name, quantity)
+      VALUES ($1, 'Fragments de Code', $2)
+      ON CONFLICT (player_id, name)
+      DO UPDATE SET quantity = resources.quantity + EXCLUDED.quantity
+    `, [player_id, fragments]);
+    
+    return reply.status(200).send({ message: `Scan terminé. +${fragments} Fragments.` });
+  } catch (error) {
+    fastify.log.error(error);
+    return reply.status(500).send({ error: "Erreur lors du scan réseau." });
+  } finally {
+    client.release();
+  }
+});
+
+interface RecycleRequest {
+  Body: {
+    player_id: string;
+  };
+}
+
+fastify.post<RecycleRequest>('/player/recycle', async (request, reply) => {
+  const { player_id } = request.body;
+  const client = await dbPool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    const resQuery = await client.query(`
+      SELECT quantity FROM resources WHERE player_id = $1 AND name = 'Fragments de Code' FOR UPDATE
+    `, [player_id]);
+    
+    if (resQuery.rows.length === 0 || resQuery.rows[0].quantity === 0) {
+      await client.query('ROLLBACK');
+      return reply.status(400).send({ error: "Aucun fragment à recycler." });
+    }
+    
+    const qty = resQuery.rows[0].quantity;
+    const creditsWon = qty * 20;
+    
+    await client.query('UPDATE resources SET quantity = 0 WHERE player_id = $1 AND name = $2', [player_id, 'Fragments de Code']);
+    await client.query('UPDATE players SET credits = credits + $1 WHERE id = $2', [creditsWon, player_id]);
+    
+    await client.query('COMMIT');
+    return reply.status(200).send({ message: `Recyclage réussi. +${creditsWon} ¤.` });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    fastify.log.error(error);
+    return reply.status(500).send({ error: "Erreur lors du recyclage." });
+  } finally {
+    client.release();
+  }
+});
+
+fastify.get<PlayerParams>('/player/resources/:id', async (request, reply) => {
+  const { id } = request.params;
+  const client = await dbPool.connect();
+  try {
+    const result = await client.query('SELECT name, quantity FROM resources WHERE player_id = $1', [id]);
+    return reply.status(200).send(result.rows);
+  } catch (error) {
+    fastify.log.error(error);
+    return reply.status(200).send([]);
+  } finally {
+    client.release();
+  }
+});
+
+interface CraftRequest {
+  Body: {
+    player_id: string;
+    item_id: string;
+    cost: number;
+  };
+}
+
+fastify.post<CraftRequest>('/player/craft', async (request, reply) => {
+  const { player_id, item_id, cost } = request.body;
+  const client = await dbPool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    const resQuery = await client.query(`
+      SELECT quantity FROM resources WHERE player_id = $1 AND name = 'Fragments de Code' FOR UPDATE
+    `, [player_id]);
+    
+    if (resQuery.rows.length === 0 || resQuery.rows[0].quantity < cost) {
+      await client.query('ROLLBACK');
+      return reply.status(400).send({ error: "Fragments insuffisants." });
+    }
+    
+    await client.query('UPDATE resources SET quantity = quantity - $2 WHERE player_id = $1 AND name = $3', [player_id, cost, 'Fragments de Code']);
+    
+    await client.query(`
+      INSERT INTO player_items (player_id, item_id, quantity)
+      VALUES ($1, $2, 1)
+      ON CONFLICT (player_id, item_id)
+      DO UPDATE SET quantity = player_items.quantity + 1
+    `, [player_id, item_id]);
+    
+    await client.query('COMMIT');
+    return reply.status(200).send({ message: `Craft réussi : ${item_id}.` });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    fastify.log.error(error);
+    return reply.status(500).send({ error: "Erreur lors du craft." });
+  } finally {
+    client.release();
+  }
+});
+
+interface UseItemRequest {
+  Body: {
+    player_id: string;
+    item_id: string;
+  };
+}
+
+fastify.post<UseItemRequest>('/player/use-item', async (request, reply) => {
+  const { player_id, item_id } = request.body;
+  const client = await dbPool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    const resQuery = await client.query(`
+      SELECT quantity FROM player_items WHERE player_id = $1 AND item_id = $2 FOR UPDATE
+    `, [player_id, item_id]);
+    
+    if (resQuery.rows.length === 0 || resQuery.rows[0].quantity <= 0) {
+      await client.query('ROLLBACK');
+      return reply.status(400).send({ error: "Item introuvable ou épuisé." });
+    }
+    
+    await client.query('UPDATE player_items SET quantity = quantity - 1 WHERE player_id = $1 AND item_id = $2', [player_id, item_id]);
+    await client.query('UPDATE players SET active_exploit = $2 WHERE id = $1', [player_id, item_id]);
+    
+    await client.query('COMMIT');
+    return reply.status(200).send({ message: `Exploit activé : ${item_id}.` });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    fastify.log.error(error);
+    return reply.status(500).send({ error: "Erreur lors de l'activation." });
+  } finally {
+    client.release();
+  }
+});
+
+fastify.get<PlayerParams>('/player/items/:id', async (request, reply) => {
+  const { id } = request.params;
+  const client = await dbPool.connect();
+  try {
+    const result = await client.query('SELECT item_id, quantity FROM player_items WHERE player_id = $1 AND quantity > 0', [id]);
+    return reply.status(200).send(result.rows);
+  } catch (error) {
+    fastify.log.error(error);
+    return reply.status(200).send([]);
+  } finally {
+    client.release();
+  }
+});
+
 // Route GET /leaderboard
 fastify.get('/leaderboard', async (request, reply) => {
   const client = await dbPool.connect();
   try {
-    const result = await client.query('SELECT username, credits, level FROM players ORDER BY credits DESC LIMIT 5');
+    const result = await client.query("SELECT username, credits, level FROM players WHERE LENGTH(id) > 10 AND id NOT LIKE 'bot-%' ORDER BY credits DESC LIMIT 5");
     return reply.status(200).send(result.rows);
   } catch (error) {
     fastify.log.error(error);

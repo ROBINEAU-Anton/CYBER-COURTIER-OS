@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Roboto+Mono:wght@400;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,18 +6,27 @@
 
 @layer base {
   body {
-    @apply bg-cyber-bg text-cyber-neon font-mono antialiased overflow-hidden selection:bg-cyber-neon selection:text-cyber-bg;
+    @apply bg-cyber-bg text-gray-200 font-sans antialiased overflow-hidden selection:bg-cyber-neon selection:text-cyber-bg;
+    font-family: 'Inter', sans-serif;
+  }
+  
+  .font-mono {
+    font-family: 'Roboto Mono', monospace;
   }
 }
 
 @layer components {
+  .glass-panel {
+    @apply bg-white/5 backdrop-blur-md border border-white/10 relative overflow-hidden shadow-lg;
+  }
+
   .cyber-panel {
-    @apply border border-cyber-neon/30 bg-cyber-dark/40 backdrop-blur-md relative overflow-hidden;
+    @apply bg-white/5 backdrop-blur-md border border-white/10 relative overflow-hidden shadow-lg;
   }
   
-  .cyber-panel::before {
+  .cyber-panel::before, .glass-panel::before {
     content: '';
-    @apply absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-cyber-neon to-transparent opacity-50;
+    @apply absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/30 to-transparent opacity-50;
   }
   
   .cyber-button {

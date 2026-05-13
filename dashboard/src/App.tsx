@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Terminal, Shield, Zap, Activity } from 'lucide-react';
 import { Leaderboard } from './components/Leaderboard';
 import { ClassSelectionModal } from './components/ClassSelectionModal';
+import { AuthScreen } from './components/AuthScreen';
 
 interface Player {
   username: string;
@@ -9,6 +10,7 @@ interface Player {
   level: number;
   xp: number;
   class: string | null;
+  active_exploit: string | null;
 }
 
 interface Server {
@@ -43,22 +45,27 @@ interface Hardware {
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
-const getPlayerId = () => {
-  let pid = localStorage.getItem('cyber_player_id');
-  if (!pid) {
-    pid = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-    localStorage.setItem('cyber_player_id', pid);
-  }
-  return pid;
-};
-
 function App() {
-  const [playerId] = useState<string>(getPlayerId());
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [playerId, setPlayerId] = useState<string | null>(null);
+  
+  useEffect(() => {
+    const savedPid = localStorage.getItem('cyber_player_id');
+    if (savedPid) {
+      setPlayerId(savedPid);
+      setIsAuthenticated(true);
+    }
+  }, []);
+
   const [player, setPlayer] = useState<Player | null>(null);
   const [servers, setServers] = useState<Server[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [globalFeed, setGlobalFeed] = useState<GlobalAction[]>([]);
   const [hardware, setHardware] = useState<Hardware[]>([]);
+  const [items, setItems] = useState<{item_id: string, quantity: number}[]>([]);
+  const [resources, setResources] = useState<{name: string, quantity: number}[]>([]);
+  const [activeTab, setActiveTab] = useState<'market' | 'inventory' | 'atelier'>('market');
+  const [scanCooldown, setScanCooldown] = useState(0);
   const [isLive, setIsLive] = useState(false);
   const [isMoneyFlash, setIsMoneyFlash] = useState(false);
   const [injectingId, setInjectingId] = useState<string | null>(null);
@@ -71,12 +78,15 @@ function App() {
   };
 
   const fetchData = async () => {
+    if (!playerId) return;
     try {
-      const [playerRes, serversRes, recentRes, hardwareRes] = await Promise.all([
+      const [playerRes, serversRes, recentRes, hardwareRes, resourcesRes, itemsRes] = await Promise.all([
         fetch(`${API_URL}/player/${playerId}`, { headers: { 'ngrok-skip-browser-warning': 'true' } }),
         fetch(`${API_URL}/servers`, { headers: { 'ngrok-skip-browser-warning': 'true' } }),
         fetch(`${API_URL}/actions/recent`, { headers: { 'ngrok-skip-browser-warning': 'true' } }),
-        fetch(`${API_URL}/player/hardware/${playerId}`, { headers: { 'ngrok-skip-browser-warning': 'true' } })
+        fetch(`${API_URL}/player/hardware/${playerId}`, { headers: { 'ngrok-skip-browser-warning': 'true' } }),
+        fetch(`${API_URL}/player/resources/${playerId}`, { headers: { 'ngrok-skip-browser-warning': 'true' } }),
+        fetch(`${API_URL}/player/items/${playerId}`, { headers: { 'ngrok-skip-browser-warning': 'true' } })
       ]);
 
       if (playerRes.ok) {
@@ -122,29 +132,36 @@ function App() {
       if (hardwareRes.ok) {
         setHardware(await hardwareRes.json());
       }
+
+      if (resourcesRes.ok) {
+        setResources(await resourcesRes.json());
+      }
+      
+      if (itemsRes.ok) {
+        setItems(await itemsRes.json());
+      }
     } catch (error) {
       console.error("Erreur de connexion API:", error);
     }
   };
 
   useEffect(() => {
-    let interval: number;
-    const initPlayer = async () => {
-      try {
-        await fetch(`${API_URL}/player/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
-          body: JSON.stringify({ player_id: playerId })
-        });
-      } catch (err) {
-        console.error("Register err", err);
-      }
-      fetchData();
-      interval = setInterval(fetchData, 1000);
-      addLog("Connexion au réseau neuronal établie.", "success");
-    };
-    initPlayer();
+    if (!playerId) return;
+    
+    fetchData();
+    const interval = setInterval(fetchData, 5000);
+    setIsLive(true);
+
     return () => clearInterval(interval);
+  }, [playerId]);
+
+  useEffect(() => {
+    if (!playerId) return;
+    
+    const cdInterval = setInterval(() => {
+      setScanCooldown(prev => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(cdInterval);
   }, [playerId]);
 
   const handleInject = async (serverId: string, packetId: string, serverName: string, cost: number) => {
@@ -234,6 +251,84 @@ function App() {
     }
   };
 
+  const handleScan = async () => {
+    if (scanCooldown > 0) return;
+    try {
+      const res = await fetch(`${API_URL}/player/scan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+        body: JSON.stringify({ player_id: playerId })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        addLog(data.message, "success");
+        setScanCooldown(30);
+        fetchData();
+      } else {
+        addLog(`Erreur scan : ${data.error}`, "error");
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleRecycle = async () => {
+    try {
+      const res = await fetch(`${API_URL}/player/recycle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+        body: JSON.stringify({ player_id: playerId })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        addLog(data.message, "success");
+        fetchData();
+      } else {
+        addLog(`Erreur recyclage : ${data.error}`, "error");
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleCraft = async (itemId: string, cost: number) => {
+    try {
+      const res = await fetch(`${API_URL}/player/craft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+        body: JSON.stringify({ player_id: playerId, item_id: itemId, cost })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        addLog(data.message, "success");
+        fetchData();
+      } else {
+        addLog(`Erreur craft : ${data.error}`, "error");
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleUseItem = async (itemId: string) => {
+    try {
+      const res = await fetch(`${API_URL}/player/use-item`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+        body: JSON.stringify({ player_id: playerId, item_id: itemId })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        addLog(data.message, "success");
+        fetchData();
+      } else {
+        addLog(`Erreur activation : ${data.error}`, "error");
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const handleResetSession = async () => {
     try {
       const res = await fetch(`${API_URL}/session/reset`, { 
@@ -252,8 +347,17 @@ function App() {
     }
   };
 
+  const handleLogin = (pid: string) => {
+    setPlayerId(pid);
+    setIsAuthenticated(true);
+  };
+
+  if (!isAuthenticated) {
+    return <AuthScreen onLogin={handleLogin} />;
+  }
+
   return (
-    <div className="h-screen w-screen overflow-hidden flex flex-col relative z-10">
+    <div className="min-h-screen bg-cyber-dark text-white font-mono flex flex-col relative">
       <div className="scanlines"></div>
 
       {player && player.level >= 2 && !player.class && (
@@ -294,6 +398,11 @@ function App() {
                 <div className="h-1.5 w-full bg-cyber-neon/20 mt-1 overflow-hidden">
                   <div className="h-full bg-cyber-neon transition-all duration-500" style={{ width: `${(player.xp / 1000) * 100}%` }}></div>
                 </div>
+                {player.active_exploit && (
+                  <div className="mt-1 text-cyber-neon bg-cyber-neon/10 border border-cyber-neon/30 px-1 py-0.5 inline-block rounded font-bold animate-pulse">
+                    ⚡ {player.active_exploit.toUpperCase()} ACTIF
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -306,9 +415,18 @@ function App() {
 
         {/* Servers Grid */}
         <section className="flex-1 flex flex-col gap-4 min-h-0">
-          <h2 className="text-lg tracking-widest border-b border-cyber-neon/30 pb-2 flex items-center gap-2">
-            <Activity size={18} /> CIBLES MATRICIELLES DÉTECTÉES
-          </h2>
+          <div className="flex justify-between items-center border-b border-white/20 pb-2">
+            <h2 className="text-lg tracking-widest flex items-center gap-2">
+              <Activity size={18} /> CIBLES MATRICIELLES
+            </h2>
+            <button 
+              onClick={handleScan}
+              disabled={scanCooldown > 0}
+              className={`px-4 py-1 border text-sm font-bold tracking-widest transition-colors ${scanCooldown > 0 ? 'border-gray-600 text-gray-500 cursor-not-allowed' : 'border-cyber-neon text-cyber-neon hover:bg-cyber-neon hover:text-black'}`}
+            >
+              {scanCooldown > 0 ? `SCAN EN RECHARGE (${scanCooldown}S)` : 'SCANNER LE RÉSEAU'}
+            </button>
+          </div>
 
           <div className="flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-4 overflow-y-auto pr-2 pb-10">
             {servers.length === 0 ? (
@@ -398,62 +516,119 @@ function App() {
           {/* Leaderboard */}
           <Leaderboard />
 
-          {/* Black Market */}
-          <div className="flex flex-col gap-2 flex-none">
-            <h2 className="text-lg tracking-widest border-b border-cyber-neon/30 pb-2">
-              MARCHÉ NOIR
-            </h2>
-            <div className="cyber-panel p-4 flex flex-col gap-2">
-              <button 
-                onClick={() => handleBuyUpgrade('botnet', 5000)}
-                className="w-full border border-cyber-neon/50 flex justify-between items-center p-3 hover:bg-cyber-neon hover:text-black transition-colors"
-              >
-                <span className="font-bold tracking-widest text-sm">Extension Botnet</span>
-                <span className="text-xs">[ 5 000 ¤ ]</span>
-              </button>
-              <button 
-                onClick={() => handleBuyHardware('CPU', 'CPU Overclocké', 'CREDITS', 20, 10000)}
-                className="w-full border border-cyber-neon/50 flex justify-between items-center p-3 hover:bg-cyber-neon hover:text-black transition-colors"
-              >
-                <span className="font-bold tracking-widest text-sm">🔋 CPU Overclocké (+20% Cr)</span>
-                <span className="text-xs">[ 10 000 ¤ ]</span>
-              </button>
-              <button 
-                onClick={() => handleBuyHardware('RAM', 'Module RAM Furtif', 'PENALTY', 50, 15000)}
-                className="w-full border border-cyber-neon/50 flex justify-between items-center p-3 hover:bg-cyber-neon hover:text-black transition-colors"
-              >
-                <span className="font-bold tracking-widest text-sm">💾 RAM Furtive (-50% Pén)</span>
-                <span className="text-xs">[ 15 000 ¤ ]</span>
-              </button>
-              <button 
-                onClick={() => handleBuyHardware('OS', 'Kernel Optimisé', 'XP', 15, 8000)}
-                className="w-full border border-cyber-neon/50 flex justify-between items-center p-3 hover:bg-cyber-neon hover:text-black transition-colors"
-              >
-                <span className="font-bold tracking-widest text-sm">⚙️ Kernel Optimisé (+15% XP)</span>
-                <span className="text-xs">[ 8 000 ¤ ]</span>
-              </button>
+          {/* SYSTEME D'ONGLETS */}
+          <div className="flex flex-col gap-2 flex-none min-h-[250px]">
+            <div className="flex border-b border-white/20">
+              <button onClick={() => setActiveTab('market')} className={`flex-1 py-2 text-sm font-bold tracking-widest transition-colors ${activeTab === 'market' ? 'border-b-2 border-cyber-neon text-white' : 'text-gray-500 hover:text-gray-300'}`}>MARCHÉ</button>
+              <button onClick={() => setActiveTab('inventory')} className={`flex-1 py-2 text-sm font-bold tracking-widest transition-colors ${activeTab === 'inventory' ? 'border-b-2 border-cyber-neon text-white' : 'text-gray-500 hover:text-gray-300'}`}>INVENTAIRE</button>
+              <button onClick={() => setActiveTab('atelier')} className={`flex-1 py-2 text-sm font-bold tracking-widest transition-colors ${activeTab === 'atelier' ? 'border-b-2 border-cyber-neon text-white' : 'text-gray-500 hover:text-gray-300'}`}>ATELIER</button>
             </div>
-          </div>
-
-          {/* INVENTAIRE HARDWARE */}
-          <div className="flex flex-col gap-2 flex-none">
-            <h2 className="text-lg tracking-widest border-b border-cyber-neon/30 pb-2 flex items-center gap-2">
-              <Zap size={18} /> INVENTAIRE HARDWARE
-            </h2>
-            <div className="cyber-panel p-4 flex flex-col gap-2 min-h-[80px]">
-              {hardware.length === 0 ? (
-                <div className="text-cyber-neon/50 text-xs italic">Aucun équipement installé...</div>
-              ) : (
-                hardware.map((hw, i) => (
-                  <div key={i} className="flex justify-between items-center bg-black/40 p-2 border-l-2 border-cyber-neon/50">
-                    <span className="text-white font-bold text-sm">
-                      {hw.slot === 'CPU' ? '🔋' : hw.slot === 'RAM' ? '💾' : '⚙️'} {hw.name}
-                    </span>
-                    <span className="text-cyber-neon/70 text-xs text-right whitespace-nowrap ml-2">
-                      {hw.bonus_type === 'CREDITS' ? '+20%' : hw.bonus_type === 'PENALTY' ? '-50%' : '+15%'} {hw.bonus_type}
-                    </span>
+            
+            <div className="glass-panel p-4 flex flex-col gap-2 flex-1 overflow-y-auto">
+              {activeTab === 'market' && (
+                <div className="flex flex-col gap-2">
+                  <button onClick={() => handleBuyUpgrade('botnet', 5000)} className="w-full border border-white/20 flex justify-between items-center p-3 hover:bg-white/10 hover:border-white/50 transition-colors">
+                    <span className="font-bold tracking-widest text-sm text-white">Extension Botnet</span>
+                    <span className="text-xs text-cyber-neon">[ 5 000 ¤ ]</span>
+                  </button>
+                  <button onClick={() => handleBuyHardware('CPU', 'CPU Overclocké', 'CREDITS', 20, 10000)} className="w-full border border-white/20 flex justify-between items-center p-3 hover:bg-white/10 hover:border-white/50 transition-colors">
+                    <span className="font-bold tracking-widest text-sm text-white">🔋 CPU Overclocké (+20% Cr)</span>
+                    <span className="text-xs text-cyber-neon">[ 10 000 ¤ ]</span>
+                  </button>
+                  <button onClick={() => handleBuyHardware('RAM', 'Module RAM Furtif', 'PENALTY', 50, 15000)} className="w-full border border-white/20 flex justify-between items-center p-3 hover:bg-white/10 hover:border-white/50 transition-colors">
+                    <span className="font-bold tracking-widest text-sm text-white">💾 RAM Furtive (-50% Pén)</span>
+                    <span className="text-xs text-cyber-neon">[ 15 000 ¤ ]</span>
+                  </button>
+                  <button onClick={() => handleBuyHardware('OS', 'Kernel Optimisé', 'XP', 15, 8000)} className="w-full border border-white/20 flex justify-between items-center p-3 hover:bg-white/10 hover:border-white/50 transition-colors">
+                    <span className="font-bold tracking-widest text-sm text-white">⚙️ Kernel Optimisé (+15% XP)</span>
+                    <span className="text-xs text-cyber-neon">[ 8 000 ¤ ]</span>
+                  </button>
+                </div>
+              )}
+              
+              {activeTab === 'inventory' && (
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <h3 className="text-sm tracking-widest text-white/70 mb-2">/// HARDWARE</h3>
+                    {hardware.length === 0 ? (
+                      <div className="text-gray-400 text-xs italic text-center py-2">Aucun équipement installé...</div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        {hardware.map((hw, i) => (
+                          <div key={i} className="flex justify-between items-center bg-black/20 p-3 rounded border border-white/10">
+                            <span className="text-white font-bold text-sm">
+                              {hw.slot === 'CPU' ? '🔋' : hw.slot === 'RAM' ? '💾' : '⚙️'} {hw.name}
+                            </span>
+                            <span className="text-cyber-neon text-xs font-mono ml-2">
+                              {hw.bonus_type === 'CREDITS' ? '+20%' : hw.bonus_type === 'PENALTY' ? '-50%' : '+15%'} {hw.bonus_type}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                ))
+                  <div>
+                    <h3 className="text-sm tracking-widest text-white/70 mb-2">/// CONSOMMABLES</h3>
+                    {items.length === 0 ? (
+                      <div className="text-gray-400 text-xs italic text-center py-2">Aucun exploit en stock...</div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        {items.map((it, i) => (
+                          <div key={i} className="flex justify-between items-center bg-black/20 p-2 rounded border border-white/10">
+                            <span className="text-white font-bold text-sm">📦 {it.item_id} (x{it.quantity})</span>
+                            <button 
+                              onClick={() => handleUseItem(it.item_id)}
+                              disabled={!!player?.active_exploit}
+                              className="px-3 py-1 bg-cyber-neon text-black text-xs font-bold hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              ACTIVER
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              {activeTab === 'atelier' && (
+                <div className="flex flex-col gap-4">
+                  {/* En-tête avec les ressources disponibles */}
+                  <div className="flex flex-col items-center py-2 border-b border-white/10">
+                    <div className="text-gray-400 text-sm">Fragments de Code disponibles :</div>
+                    <div className="text-3xl font-bold text-cyber-neon font-mono mt-1">
+                      {resources.find(r => r.name === 'Fragments de Code')?.quantity || 0}
+                    </div>
+                  </div>
+
+                  {/* Section 1 : COMPILATION (Crafting) */}
+                  <div className="flex flex-col gap-2">
+                    <h3 className="text-sm tracking-widest text-white/70">/// COMPILATION</h3>
+                    <button 
+                      onClick={() => handleCraft('bypass_v2', 10)}
+                      disabled={(resources.find(r => r.name === 'Fragments de Code')?.quantity || 0) < 10}
+                      className="w-full border border-white/20 flex justify-between items-center p-3 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed group"
+                    >
+                      <div className="flex flex-col items-start text-left">
+                        <span className="font-bold tracking-widest text-sm text-white">📦 Exploit : Bypass_v2</span>
+                        <span className="text-xs text-gray-400 mt-1">Garantit 100% de succès sur la prochaine attaque.</span>
+                      </div>
+                      <span className="text-xs text-cyber-neon group-hover:text-white transition-colors whitespace-nowrap ml-2">[ 10 Frags ]</span>
+                    </button>
+                  </div>
+
+                  {/* Section 2 : RECYCLAGE */}
+                  <div className="flex flex-col gap-2 mt-2">
+                    <h3 className="text-sm tracking-widest text-white/70">/// RECYCLAGE</h3>
+                    <button 
+                      onClick={handleRecycle}
+                      disabled={!resources.find(r => r.name === 'Fragments de Code') || resources.find(r => r.name === 'Fragments de Code')!.quantity === 0}
+                      className="w-full py-3 border border-cyber-neon text-cyber-neon font-bold tracking-widest hover:bg-cyber-neon hover:text-black transition-colors disabled:border-gray-600 disabled:text-gray-500 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                    >
+                      RECYCLER (20 ¤ / unité)
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           </div>

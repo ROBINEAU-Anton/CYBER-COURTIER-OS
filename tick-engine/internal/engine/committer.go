@@ -54,6 +54,15 @@ func (c *Committer) CommitBatch(ctx context.Context, batch models.ResolutionBatc
 
 	// 1. Mise à jour du statut des actions
 	for _, res := range batch.Results {
+		// VÉRIFICATION DU BYPASS_V2
+		var activeExploit string
+		errEx := tx.QueryRow(ctx, "SELECT COALESCE(p.active_exploit, '') FROM virus_actions va JOIN players p ON p.id = va.player_id WHERE va.id = $1", res.ActionID).Scan(&activeExploit)
+		if errEx == nil && activeExploit == "bypass_v2" {
+			res.Status = models.StatusSuccess // Force le succès
+			// Consommer l'exploit
+			_, _ = tx.Exec(ctx, "UPDATE players p SET active_exploit = NULL FROM virus_actions va WHERE p.id = va.player_id AND va.id = $1", res.ActionID)
+		}
+
 		tagAction, errAction := tx.Exec(ctx, "UPDATE virus_actions SET status = $1 WHERE id = $2", string(res.Status), res.ActionID)
 		if errAction != nil {
 			slog.Error("Erreur SQL lors de l'UPDATE de l'action", "action_id", res.ActionID, "error", errAction)
@@ -138,7 +147,9 @@ func (c *Committer) CommitBatch(ctx context.Context, batch models.ResolutionBatc
 				SET level = p.level + 1,
 				    xp = 0
 				FROM virus_actions va
-				WHERE p.id = va.player_id AND va.id = $1 AND p.xp >= (p.level * 1000)
+				WHERE p.id = va.player_id AND va.id = $1 AND p.xp >= (
+					CASE WHEN p.level = 1 THEN 200 ELSE p.level * 1000 END
+				)
 			`, res.ActionID)
 			if errLvl != nil {
 				slog.Error("Erreur SQL lors du level-up du joueur", "action_id", res.ActionID, "error", errLvl)

@@ -22,14 +22,14 @@ services:
       - "3000:3000"
     restart: always
 
-  sim-engine:
-    build:
-      context: ./sim-engine
-      dockerfile: Dockerfile
-    environment:
-      - REDIS_URL=redis://192.168.1.96:6379
-      - DATABASE_URL=postgres://user_cyber:password_cyber@192.168.1.96:5432/cyber_db
-    restart: always
+  # sim-engine:
+  #   build:
+  #     context: ./sim-engine
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     - REDIS_URL=redis://192.168.1.96:6379
+  #     - DATABASE_URL=postgres://user_cyber:password_cyber@192.168.1.96:5432/cyber_db
+  #   restart: always
 
   dashboard:
     build:
